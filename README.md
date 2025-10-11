@@ -122,12 +122,12 @@ For the Mackey-Glass dataset, a single script handles the entire pipeline: train
 * **Standard FGL Experiment:**
     This command runs the full pipeline for a forecast horizon of 5 steps.
     ```bash
-    python FGL_MG.py --horizon 5 --num_bins 50 --alpha 0.5 --epochs 20
+    python base_exp.py --horizon 5 --num_bins 50 --alpha 0.5 --epochs 20
     ```
 * **FGL with Page-Hinkley Drift Detection:**
     To evaluate FGL with online adaptation to data drift, add the `--use_ph` flag.
     ```bash
-    python FGL_MG.py --horizon 5 --num_bins 50 --alpha 0.5 --epochs 20 --use_ph
+    python drift_exp.py --horizon 5 --num_bins 50 --alpha 0.5 --epochs 20 --use_ph
     ```
 
 ---
