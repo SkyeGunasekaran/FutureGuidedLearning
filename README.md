@@ -19,8 +19,8 @@ Our experiments demonstrate that FGL significantly improves forecasting performa
 
 ![Overview of FGL](fig_1.png)
 <details>
-<summary><b>Figure 1: Detailed Overview of the FGL Framework. (Click to expand)</b></summary>
-(A) FGL Theoretical Intuition:</b> A "teacher" model operates on near-future data, while a "student" model makes long-term forecasts from past data. Knowledge is transferred from the teacher to the student. <b>(A1) Knowledge Distillation:</b> Information is transferred by minimizing the Kullback-Leibler (KL) divergence between the models' output probability distributions. <b>(B) Event Prediction:</b> The teacher is trained on actual events (e.g., seizures), and its knowledge is distilled to guide the student's forecasts. <b>(C) Regression Forecasting:</b> The teacher makes short-term predictions, providing a dynamic guide to enhance the student's long-term forecasting accuracy.
+<summary><b>Figure 3: Detailed Overview of the FGL Framework. (Click to expand)</b></summary>
+Overview of FGL and its applications. <b>A</b> In the FGL framework, a teacher model operates in the relative future of a student model that focuses on long-term forecasting. After training the teacher on its future-oriented task, both models perform inference during the student’s training phase. The probability distributions from the teacher and student are extracted, and a loss is computed based on Eq. (1). <b>A1</b> Knowledge distillation transfers information via the Kullback–Leibler (KL) divergence between class distributions. <b>B</b> In an event prediction setting, the teacher is trained directly on the events themselves, while the student is trained to forecast these events. Future labels are distilled from the teacher to the student, guiding the student to align more closely with the teacher model’s predictions, despite using data from the relative past. <b>C</b> In a regression forecasting scenario, the teacher and student perform short-term and long-term forecasting, respectively. Similar to event prediction, the student gains insights from the teacher during training, enhancing its ability to predict further into the future.
 </details>
 
 ---
