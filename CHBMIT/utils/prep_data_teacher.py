@@ -2,119 +2,115 @@ import numpy as np
 from sklearn.utils import shuffle
 from utils.model_stuff import split_arrays_ictal
 
+# --- Helper Functions ---
+
+def _flatten_interictal_data(interictal_X, interictal_y):
+    """Checks if interictal data is a list of arrays and concatenates if so."""
+    if isinstance(interictal_y, list):
+        interictal_X = np.concatenate(interictal_X, axis=0)
+        interictal_y = np.concatenate(interictal_y, axis=0)
+    return interictal_X, interictal_y
+
+def _finalize_split_arrays(train_lists, test_lists, no_test=False):
+    """Concatenates lists of arrays into final training and testing sets."""
+    X_train = np.concatenate(train_lists[0], axis=0) if train_lists[0] else np.array([])
+    y_train = np.concatenate(train_lists[1], axis=0) if train_lists[1] else np.array([])
+    
+    if no_test:
+        return X_train, y_train
+        
+    X_test = np.concatenate(test_lists[0], axis=0) if test_lists[0] else np.array([])
+    y_test = np.concatenate(test_lists[1], axis=0) if test_lists[1] else np.array([])
+    
+    return X_train, y_train, X_test, y_test
+
+# --- Main Splitting Functions ---
 
 def train_val_test_split_continual_t(ictal_X, ictal_y, interictal_X, interictal_y, test_ratio, no_test=False):
+    """
+    Splits data chronologically: earlier seizures for training, later seizures for testing.
+    """
     num_sz = len(ictal_y)
-    if not no_test:
-        num_sz_test = int(test_ratio*num_sz)
-        if num_sz_test < 1: num_sz_test = 1
-        print ('Total %d seizures, last %d is used for testing.' %(num_sz, num_sz_test))
-    else:
+    
+    if no_test:
         num_sz_test = 0
-        print ('Total %d seizures, all are used for training.' %(num_sz))
-
-    if isinstance(interictal_y, list):
-        interictal_X = np.concatenate(interictal_X, axis=0)
-        interictal_y = np.concatenate(interictal_y, axis=0)
-    interictal_fold_len = int(round(1.0*interictal_y.shape[0]/num_sz))
-
-    print ('length of each interical segment',interictal_fold_len)
-
-    X_train_all, y_train_all, X_test_all, y_test_all, = [], [], [], []
-
-    for i in range(num_sz):
-        X_temp_ictal = ictal_X[i]
-        y_temp_ictal = ictal_y[i]
-
-        X_temp_interictal = interictal_X[i*interictal_fold_len:(i+1)*interictal_fold_len]
-        y_temp_interictal = interictal_y[i*interictal_fold_len:(i+1)*interictal_fold_len]
-        
-        #Downsampling interictal training set so that the 2 classes
-        #are balanced
-        '''
-        print ('Balancing:', y_temp_ictal.shape,y_temp_interictal.shape)
-        down_spl = int(np.floor(y_temp_interictal.shape[0]/y_temp_ictal.shape[0]))
-        if down_spl > 1:
-            X_temp_interictal = X_temp_interictal[::down_spl]
-            y_temp_interictal = y_temp_interictal[::down_spl]
-        elif down_spl == 1:
-            X_temp_interictal = X_temp_interictal[:X_temp_ictal.shape[0]]
-            y_temp_interictal = y_temp_interictal[:X_temp_ictal.shape[0]]
-        '''
-        X_temp = np.concatenate((X_temp_interictal, X_temp_ictal), axis=0)
-        y_temp = np.concatenate((y_temp_interictal, y_temp_ictal), axis=0)
-
-
-        if i < num_sz - num_sz_test:
-            #We treat this as a training sample, mask overlapped samples
-            y_temp[y_temp==2] = 1
-            y_temp[y_temp==-1] = 0
-            X_train_all.append(X_temp)
-            y_train_all.append(y_temp)
-        else:
-            #we treat this as a testing sample, eliminate overlapped samples
-            X_temp = X_temp[y_temp != 2]
-            y_temp = y_temp[y_temp != 2]
-            X_temp = X_temp[y_temp != -1]
-            y_temp = y_temp[y_temp != -1]
-            X_test_all.append(X_temp)
-            y_test_all.append(y_temp)
-
-    X_train_all = np.concatenate(X_train_all, axis=0)
-    y_train_all = np.concatenate(y_train_all, axis=0)
-    if not no_test:
-        X_test_all = np.concatenate(X_test_all, axis=0)
-        y_test_all = np.concatenate(y_test_all, axis=0)
-        return X_train_all, y_train_all, X_test_all, y_test_all
+        print(f'Total {num_sz} seizures, all are used for training.')
     else:
-        return X_train_all, y_train_all
-    
-def train_test_split_t(ictal_X, ictal_y, interictal_X, interictal_y, test_ratio):
-    num_sz = len(ictal_y)
-    
-    print ('Total %d seizures, %f percent of each seizure is used for testing.' %(num_sz, test_ratio))
+        num_sz_test = max(1, int(test_ratio * num_sz))
+        print(f'Total {num_sz} seizures, last {num_sz_test} is used for testing.')
 
-    if isinstance(interictal_y, list):
-        interictal_X = np.concatenate(interictal_X, axis=0)
-        interictal_y = np.concatenate(interictal_y, axis=0)
-    interictal_fold_len = int(round(1.0*interictal_y.shape[0]/num_sz))
+    interictal_X, interictal_y = _flatten_interictal_data(interictal_X, interictal_y)
+    interictal_fold_len = int(round(interictal_y.shape[0] / num_sz))
+    print(f'Length of each interictal segment: {interictal_fold_len}')
 
-    print ('length of each interical segment',interictal_fold_len)
-
-    X_train_all, y_train_all, X_test_all, y_test_all, = [], [], [], []
+    X_train_all, y_train_all, X_test_all, y_test_all = [], [], [], []
 
     for i in range(num_sz):
-        X_temp_ictal = ictal_X[i]
-        y_temp_ictal = ictal_y[i]
+        # Combine the i-th ictal seizure with its corresponding interictal segment
+        start, end = i * interictal_fold_len, (i + 1) * interictal_fold_len
+        X_combined = np.concatenate((interictal_X[start:end], ictal_X[i]), axis=0)
+        y_combined = np.concatenate((interictal_y[start:end], ictal_y[i]), axis=0)
 
-        #process interictal data by dividing by fold length
-        X_temp_interictal = interictal_X[i*interictal_fold_len:(i+1)*interictal_fold_len]
-        y_temp_interictal = interictal_y[i*interictal_fold_len:(i+1)*interictal_fold_len]
-        X_train_interictal, X_test_interictal = X_temp_interictal[:int(X_temp_interictal.shape[0]*test_ratio)], X_temp_interictal[int(X_temp_interictal.shape[0]*test_ratio):]
-        y_train_interictal, y_test_interictal = y_temp_interictal[:int(y_temp_interictal.shape[0]*test_ratio)], y_temp_interictal[int(y_temp_interictal.shape[0]*test_ratio):]
-    
-        #process ictal data by separating by 1s/2s and splitting 
-        X_train_ictal, y_train_ictal, X_test_ictal, y_test_ictal = split_arrays_ictal(X_temp_ictal, y_temp_ictal, test_ratio)
+        # Assign to train or test set based on chronological order
+        if i < num_sz - num_sz_test:
+            # Training data: map oversampled labels (2, -1) to respective classes (1, 0)
+            y_combined[y_combined == 2] = 1
+            y_combined[y_combined == -1] = 0
+            X_train_all.append(X_combined)
+            y_train_all.append(y_combined)
+        else:
+            # Testing data: remove all oversampled samples (labels 2, -1)
+            mask = (y_combined != 2) & (y_combined != -1)
+            X_test_all.append(X_combined[mask])
+            y_test_all.append(y_combined[mask])
+            
+    return _finalize_split_arrays(
+        (X_train_all, y_train_all), 
+        (X_test_all, y_test_all), 
+        no_test=no_test
+    )
+
+def train_test_split_t(ictal_X, ictal_y, interictal_X, interictal_y, test_ratio):
+    """
+    Splits each seizure individually into training and testing sets.
+    Note: `test_ratio` here defines the proportion used for the *training* set.
+    """
+    num_sz = len(ictal_y)
+    print(f'Total {num_sz} seizures, {test_ratio:.2%} of each seizure used for training.')
+
+    interictal_X, interictal_y = _flatten_interictal_data(interictal_X, interictal_y)
+    interictal_fold_len = int(round(interictal_y.shape[0] / num_sz))
+    print(f'Length of each interictal segment: {interictal_fold_len}')
+
+    X_train_all, y_train_all, X_test_all, y_test_all = [], [], [], []
+
+    for i in range(num_sz):
+        # Get the i-th ictal seizure and its corresponding interictal data
+        start, end = i * interictal_fold_len, (i + 1) * interictal_fold_len
+        X_interictal_seg, y_interictal_seg = interictal_X[start:end], interictal_y[start:end]
+        X_ictal_seg, y_ictal_seg = ictal_X[i], ictal_y[i]
+
+        # Split interictal data
+        split_idx = int(X_interictal_seg.shape[0] * test_ratio)
+        X_train_inter, X_test_inter = X_interictal_seg[:split_idx], X_interictal_seg[split_idx:]
+        y_train_inter, y_test_inter = y_interictal_seg[:split_idx], y_interictal_seg[split_idx:]
         
-        #oversampled data is treated as normal data for training
-        y_train_ictal[y_train_ictal==2] = 1
-        y_train_interictal[y_train_interictal==2] = 1
+        # Split ictal data (handles oversampled data internally)
+        X_train_ictal, y_train_ictal, X_test_ictal, y_test_ictal = split_arrays_ictal(
+            X_ictal_seg, y_ictal_seg, test_ratio
+        )
 
-        #remove oversampled data in testing
-        X_test_ictal = X_test_ictal[y_test_ictal != 2]
-        X_test_interictal = X_test_interictal[y_test_interictal != 2]
-        y_test_ictal = y_test_ictal[y_test_ictal != 2]
-        y_test_interictal = y_test_interictal[y_test_interictal != 2]
-
-
-        #append data to total list 
-        X_train_all.append(np.concatenate((X_train_interictal, X_train_ictal), axis=0))
-        X_test_all.append(np.concatenate((X_test_interictal, X_test_ictal), axis=0))
-        y_train_all.append(np.concatenate((y_train_interictal, y_train_ictal), axis=0))
-        y_test_all.append(np.concatenate((y_test_interictal, y_test_ictal), axis=0))
+        # Process labels for training and testing sets
+        y_train_ictal[y_train_ictal == 2] = 1 # Map oversampled to positive class for training
+        test_ictal_mask = y_test_ictal != 2 # Remove oversampled from testing
         
-    X_train_all = np.concatenate(X_train_all, axis=0)
-    y_train_all = np.concatenate(y_train_all, axis=0)
-    X_test_all = np.concatenate(X_test_all, axis=0)
-    y_test_all = np.concatenate(y_test_all, axis=0)
-    return X_train_all, y_train_all, X_test_all, y_test_all
+        # Combine and append results for this seizure
+        X_train_all.append(np.concatenate((X_train_inter, X_train_ictal), axis=0))
+        y_train_all.append(np.concatenate((y_train_inter, y_train_ictal), axis=0))
+        X_test_all.append(np.concatenate((X_test_inter, X_test_ictal[test_ictal_mask]), axis=0))
+        y_test_all.append(np.concatenate((y_test_inter, y_test_ictal[test_ictal_mask]), axis=0))
+            
+    return _finalize_split_arrays(
+        (X_train_all, y_train_all), 
+        (X_test_all, y_test_all)
+    )

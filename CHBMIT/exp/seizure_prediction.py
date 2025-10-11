@@ -1,176 +1,166 @@
 import argparse
 import json
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 from sklearn.metrics import roc_auc_score, confusion_matrix, roc_curve
-import matplotlib.pyplot as plt
+import numpy as np
 
 from utils.load_signals_student import PrepDataStudent
 from utils.prep_data_student import train_val_test_split_continual_s
-from models.model import CNN_LSTM_Model
-from models.MViT import MViT
+from models.models import CNN_LSTM_Model, MViT
 
+# --- Helper Functions ---
 
 def find_best_threshold(y_true, y_pred):
     """
     Determines the optimal classification threshold using the Youden index.
-
-    Args:
-        y_true (array-like): Ground truth binary labels.
-        y_pred (array-like): Predicted probabilities.
-
-    Returns:
-        float: Optimal threshold value.
+    (Function signature remains unchanged)
     """
     fpr, tpr, thresholds = roc_curve(y_true, y_pred)
+    if len(thresholds) == 0:
+        return 0.5 # Return a default threshold if roc_curve is degenerate
     youden_j = tpr - fpr
     optimal_idx = np.argmax(youden_j)
     return thresholds[optimal_idx]
 
+def _prepare_data(target, device):
+    """Loads, splits, and prepares data into a DataLoader and test tensors."""
+    with open('student_settings.json', 'r') as k:
+        settings = json.load(k)
+    
+    ictal_X, ictal_y = PrepDataStudent(target, 'ictal', settings).apply()
+    interictal_X, interictal_y = PrepDataStudent(target, 'interictal', settings).apply()
 
-def train_and_evaluate(target, trials, model_type, epochs=25):
-    """
-    Trains and evaluates a seizure prediction model for a given patient.
-
-    Args:
-        target (str): Patient identifier.
-        trials (int): Number of training trials.
-        model_type (str): Model type, either 'CNN_LSTM' or 'MViT'.
-        epochs (int): Number of training epochs.
-
-    Returns:
-        list: A list of results containing FPR, Sensitivity, and AUC-ROC for each trial.
-    """
-    print(f'Training Model: {model_type} | Patient: {target} | Trials: {trials}')
-    torch.cuda.empty_cache()
-
-    # Load student model settings
-    with open('student_settings.json') as k:
-        student_settings = json.load(k)
-
-    student_results = []
-
-    # Load ictal and interictal data
-    ictal_X, ictal_y = PrepDataStudent(target, type='ictal', settings=student_settings).apply()
-    interictal_X, interictal_y = PrepDataStudent(target, type='interictal', settings=student_settings).apply()
-
-    # Split into training and testing sets
     X_train, y_train, X_test, y_test = train_val_test_split_continual_s(
         ictal_X, ictal_y, interictal_X, interictal_y, 0.35
     )
 
-    # Convert training data to PyTorch tensors and move to GPU
-    Y_train = torch.tensor(y_train).long().to('cuda')
-    X_train = torch.tensor(X_train).float().to('cuda')
-
-    # Create a DataLoader for the training set
-    train_dataset = TensorDataset(X_train, Y_train)
+    # Create DataLoader for training
+    X_train_tensor = torch.tensor(X_train, dtype=torch.float32).to(device)
+    y_train_tensor = torch.tensor(y_train, dtype=torch.long).to(device)
+    train_dataset = TensorDataset(X_train_tensor, y_train_tensor)
     train_loader = DataLoader(dataset=train_dataset, batch_size=32, shuffle=False)
+    
+    # Create tensors for testing
+    X_test_tensor = torch.tensor(X_test, dtype=torch.float32).to(device)
+    y_test_tensor = torch.tensor(y_test, dtype=torch.long).to(device)
+    
+    return train_loader, X_test_tensor, y_test_tensor, X_train_tensor.shape
 
-    # Perform multiple training trials
-    for trial in range(trials):
-        print(f'\nStarting Trial {trial + 1}/{trials} for Patient {target}...')
+def _build_model(model_type, input_shape, device):
+    """Builds and returns the specified model."""
+    if model_type == 'MViT':
+        # MViT specific hyperparameters
+        config = {
+            "patch_size": (5, 10), "embed_dim": 128, "num_heads": 4,
+            "hidden_dim": 256, "num_layers": 4, "dropout": 0.1
+        }
+        model = MViT(X_shape=input_shape, in_channels=input_shape[2], num_classes=2, **config).to(device)
+    elif model_type == 'CNN_LSTM':
+        model = CNN_LSTM_Model(input_shape).to(device)
+    else:
+        raise ValueError("Invalid model type specified.")
+    return model
 
-        # Initialize model
-        if model_type == 'MViT':
-            student = MViT(
-                X_shape=X_train.shape,
-                in_channels=X_train.shape[2],
-                num_classes=2,
-                patch_size=(5, 10),
-                embed_dim=128,
-                num_heads=4,
-                hidden_dim=256,
-                num_layers=4,
-                dropout=0.1
-            ).to('cuda')
-        else:
-            student = CNN_LSTM_Model(X_train.shape).to('cuda')
-
-        # Define loss function and optimizer
-        ce_loss = nn.CrossEntropyLoss()
-        optimizer = torch.optim.Adam(student.parameters(), lr=5e-4, betas=(0.9, 0.999), eps=1e-8)
-
-        pbar = tqdm(total=epochs, desc=f"Training {model_type} for Patient {target}, Trial {trial + 1}")
-
-        # Training loop
+def _run_training_loop(model, train_loader, epochs, device, trial_desc):
+    """Executes the training process for a single trial."""
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=5e-4, betas=(0.9, 0.999), eps=1e-8)
+    
+    with tqdm(total=epochs, desc=trial_desc) as pbar:
         for epoch in range(epochs):
-            student.train()
-
+            model.train()
             for X_batch, Y_batch in train_loader:
-                X_batch, Y_batch = X_batch.to("cuda"), Y_batch.to("cuda")
-
-                # Forward pass
-                student_logits = student(X_batch)
-                loss = ce_loss(student_logits, Y_batch)
-
-                # Backward pass and optimization
                 optimizer.zero_grad()
+                logits = model(X_batch)
+                loss = criterion(logits, Y_batch)
                 loss.backward()
                 optimizer.step()
-
             pbar.update(1)
 
-        pbar.close()
+def _evaluate_model(model, X_test, y_test):
+    """Evaluates the trained model and computes performance metrics."""
+    model.eval()
+    with torch.no_grad():
+        predictions_raw = model(X_test)
+    
+    y_true = y_test.cpu().numpy()
+    y_probs = F.softmax(predictions_raw, dim=1)[:, 1].cpu().numpy()
+    
+    # Calculate metrics
+    threshold = find_best_threshold(y_true, y_probs)
+    y_pred_binary = (y_probs >= threshold).astype(int)
+    
+    tn, fp, fn, tp = confusion_matrix(y_true, y_pred_binary).ravel()
+    
+    fpr = fp / (fp + tn) if (fp + tn) > 0 else 0
+    sensitivity = tp / (tp + fn) if (tp + fn) > 0 else 0
+    auc_roc = roc_auc_score(y_true, y_probs)
+    
+    return [fpr, sensitivity, auc_roc]
 
-        # Evaluate the trained model
-        student.eval()
-        X_tensor = torch.tensor(X_test).float().to('cuda')
-        y_tensor = torch.tensor(y_test).long().to('cuda')
+# --- Main Training Function ---
 
-        with torch.no_grad():
-            predictions = student(X_tensor)
+def train_and_evaluate(target, trials, model_type, epochs=25):
+    """
+    Trains and evaluates a seizure prediction model for a given patient.
+    (Function signature remains unchanged)
+    """
+    print(f'Training Model: {model_type} | Patient: {target} | Trials: {trials}')
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    torch.cuda.empty_cache()
 
-        # Convert outputs to probabilities
-        predictions = F.softmax(predictions, dim=1)[:, 1].cpu().numpy()
-
-        # Find optimal threshold and generate binary predictions
-        threshold = find_best_threshold(y_tensor.cpu(), predictions)
-        binary_predictions = (predictions >= threshold).astype(int)
-
-        # Compute confusion matrix and derived metrics
-        cm = confusion_matrix(y_tensor.cpu(), binary_predictions)
-        tn, fp, fn, tp = cm.ravel()
-
-        fpr = fp / (fp + tn)
-        sensitivity = tp / (tp + fn)
-        auc_roc = roc_auc_score(y_tensor.cpu(), predictions)
-
-        # Log results
+    # Prepare data once for all trials
+    train_loader, X_test, y_test, input_shape = _prepare_data(target, device)
+    
+    student_results = []
+    for trial in range(trials):
+        print(f'\nStarting Trial {trial + 1}/{trials} for Patient {target}...')
+        student = _build_model(model_type, input_shape, device)
+        
+        trial_desc = f"Training {model_type} for Patient {target}, Trial {trial + 1}"
+        _run_training_loop(student, train_loader, epochs, device, trial_desc)
+        
+        metrics = _evaluate_model(student, X_test, y_test)
+        fpr, sensitivity, auc_roc = metrics
+        
         print(f'Patient {target}, Trial {trial + 1}:')
-        print(f'  False Positive Rate (FPR): {fpr:.2f}')
-        print(f'  Sensitivity: {sensitivity:.2f}')
-        print(f'  AUCROC: {auc_roc:.2f}')
-
-        student_results.append([fpr, sensitivity, auc_roc])
-
+        print(f'  False Positive Rate (FPR): {fpr:.4f}')
+        print(f'  Sensitivity: {sensitivity:.4f}')
+        print(f'  AUCROC: {auc_roc:.4f}')
+        student_results.append(metrics)
+        
     return student_results
 
+# --- Execution Block ---
 
-if __name__ == "__main__":
-    """
-    Main execution loop that takes command-line arguments for:
-    - Patient ID
-    - Number of trials
-    - Model type (CNN_LSTM or MViT)
-    """
-
+def main():
+    """Main execution function to parse arguments and run training."""
     parser = argparse.ArgumentParser(description="Seizure Prediction Model Training")
     parser.add_argument("--patient", type=str, required=True, help="Target patient ID")
-    parser.add_argument("--trials", type=int, default=3, help="Number of training trials (default: 3)")
-    parser.add_argument("--model", type=str, choices=['CNN_LSTM', 'MViT'], default='CNN_LSTM',
-                        help="Model type: 'CNN_LSTM' or 'MViT' (default: CNN_LSTM)")
-    parser.add_argument("--epochs", type=int, default=25, help="Number of training epochs (default: 25)")
-
+    parser.add_argument("--trials", type=int, default=3, help="Number of training trials")
+    parser.add_argument("--model", type=str, choices=['CNN_LSTM', 'MViT'], default='CNN_LSTM', help="Model architecture")
+    parser.add_argument("--epochs", type=int, default=25, help="Number of training epochs")
     args = parser.parse_args()
 
-    # Train and evaluate the model for the given patient
     results = train_and_evaluate(args.patient, args.trials, args.model, args.epochs)
 
-    # Save results to a text file
-    with open('Prediction_results.txt', 'a') as f:
-        f.write(f'Patient {args.patient} Results: {str(results)}\n')
+    # Save results to a structured JSON file for easier parsing
+    try:
+        with open("Prediction_results.json", 'r') as f:
+            existing_results = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        existing_results = {}
+        
+    existing_results[args.patient] = results
+    
+    with open("Prediction_results.json", 'w') as f:
+        json.dump(existing_results, f, indent=4)
+        
+    print(f"\nTraining complete. Results for Patient {args.patient} saved to Prediction_results.json")
+
+if __name__ == "__main__":
+    main()

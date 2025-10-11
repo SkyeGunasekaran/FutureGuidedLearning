@@ -4,232 +4,170 @@ import pandas as pd
 import scipy.io
 from scipy.signal import resample
 import stft
-from utils.save_load import save_pickle_file, load_pickle_file, save_hickle_file, load_hickle_file
+from utils.save_load import save_hickle_file, load_hickle_file
 from utils.group_seizure_student import group_seizure
 
 def makedirs(dir):
+    """Creates a directory if it does not already exist."""
     try:
         os.makedirs(dir)
-    except:
+    except FileExistsError:
         pass
 
+def _get_segment_fpath(data_dir, target, data_type, segment_num):
+    """Formats the file path for a given data segment."""
+    dir_path = os.path.join(data_dir, target)
+    fname = f"{target}_{data_type}_segment_{str(segment_num).zfill(4)}.mat"
+    return os.path.join(dir_path, target, fname)
+
 def calculate_interictal_hours(data_dir, target):
-    print (f'Calculating interictal hours for patient {target}')
-    dir = os.path.join(data_dir, target)
-    done = False
-    i = 0
+    """Calculates the total hours of interictal data for a patient."""
+    print(f'Calculating interictal hours for patient {target}')
     total_length = 0
-    while not done:
-        i += 1
-        if i < 10:
-            nstr = '000%d' %i
-        elif i < 100:
-            nstr = '00%d' %i
-        elif i < 1000:
-            nstr = '0%d' %i
-        else:
-            nstr = '%d' %i
+    freq = 0
+    for i in range(1, 10000):  # A safe upper limit for segment numbers
+        filename = _get_segment_fpath(data_dir, target, 'interictal', i)
+        if not os.path.exists(filename):
+            break
+        data = scipy.io.loadmat(filename)
+        segment_key = f'interictal_segment_{i}'
+        total_length += data[segment_key][0, 0]['data'].shape[1]
+        if freq == 0:
+            freq = int(data[segment_key][0, 0]['sampling_frequency'][0, 0])
+    
+    if freq == 0:
+        print(f"No interictal data found for patient {target}")
+        return
 
-        filename = '%s/%s/%s_interictal_segment_%s.mat' % (dir, target, target, nstr)
-        if os.path.exists(filename):
-            data = scipy.io.loadmat(filename)
-            freq = int(data[f'interictal_segment_{i}'][0][0][2][0][0])+1
-            total_length += data[f'interictal_segment_{i}'][0][0][0].shape[1]
-        else:
-            done = True
-    total_hours = total_length/60/60/freq
-    print(f'total hours of interictal data for patient {target}: ', total_hours)
+    total_hours = total_length / (60 * 60 * freq)
+    print(f'Total hours of interictal data for patient {target}: {total_hours}')
+
 def load_signals_Kaggle2014Pred(data_dir, target, data_type):
-    print (f'Seizure Prediction - Loading {data_type} data for patient {target}')
-    dir = os.path.join(data_dir, target)
-    done = False
-    i = 0
-    while not done:
-        i += 1
-        if i < 10:
-            nstr = '000%d' %i
-        elif i < 100:
-            nstr = '00%d' %i
-        elif i < 1000:
-            nstr = '0%d' %i
-        else:
-            nstr = '%d' %i
-
-        filename = '%s/%s/%s_%s_segment_%s.mat' % (dir, target, target, data_type, nstr)
-        if os.path.exists(filename):
-            data = scipy.io.loadmat(filename)
-            # discard preictal segments from 66 to 35 min prior to seizure
-            if data_type == 'preictal':
-                for skey in data.keys():
-                    if "_segment_" in skey.lower():
-                        mykey = skey
-                sequence = data[mykey][0][0][4][0][0]
-                if (sequence <= 3):
-                    print ('Skipping %s....' %filename)
-                    continue
-            yield(data)
-        else:
+    """Loads seizure prediction data segments for a given patient and data type."""
+    print(f'Seizure Prediction - Loading {data_type} data for patient {target}')
+    for i in range(1, 10000):
+        filename = _get_segment_fpath(data_dir, target, data_type, i)
+        if not os.path.exists(filename):
             if i == 1:
-                raise Exception("file %s not found" % filename)
-            done = True
+                raise FileNotFoundError(f"File {filename} not found")
+            break
 
+        data = scipy.io.loadmat(filename)
+        if data_type == 'preictal':
+            mykey = next((key for key in data if "_segment_" in key.lower()), None)
+            if mykey and data[mykey][0, 0]['sequence'][0, 0] <= 3:
+                print(f'Skipping {filename}....')
+                continue
+        
+        yield data
 
 class PrepDataStudent():
     def __init__(self, target, type, settings):
         self.target = target
         self.settings = settings
         self.type = type
-        self.global_proj = np.array([0.0]*114)
 
     def read_raw_signal(self):
+        """Reads raw signal data based on the dataset specified in settings."""
         if self.settings['dataset'] == 'Kaggle2014':
-            if self.type == 'ictal':
-                data_type = 'preictal'
-            else:
-                data_type = self.type
+            data_type = 'preictal' if self.type == 'ictal' else self.type
             return load_signals_Kaggle2014Pred(self.settings['datadir'], self.target, data_type)
-
         return 'array, freq, misc'
 
+    def _process_single_segment(self, segment, y_value, DataSampleSize, numts, ictal_ovl_len=0):
+        """Helper function to process a single raw data segment."""
+        X, y, sequences = [], [], []
+        
+        mykey = next((key for key in segment if "_segment_" in key.lower()), None)
+        if not mykey:
+            return X, y, sequences
+
+        data = segment[mykey][0, 0]['data']
+        sampleFrequency = segment[mykey][0, 0]['sampling_frequency'][0, 0]
+        sequence = segment[mykey][0, 0]['sequence'][0, 0] if 'sequence' in segment[mykey][0, 0].dtype.names else None
+
+        targetFrequency = 200 if 'Dog_' in self.target else 1000
+        if sampleFrequency > targetFrequency:
+            data = resample(data, int(targetFrequency * (data.shape[1] / sampleFrequency)), axis=-1)
+        
+        data = data.transpose()
+        window_len = int(DataSampleSize * numts)
+
+        for i in range(int(data.shape[0] / window_len)):
+            s = data[i * window_len:(i + 1) * window_len, :]
+            stft_data = self._compute_stft(s, DataSampleSize)
+            X.append(stft_data)
+            y.append(y_value)
+            if sequence is not None:
+                sequences.append(sequence)
+
+        if ictal_ovl_len > 0:
+            i = 1
+            while (window_len + (i + 1) * ictal_ovl_len <= data.shape[0]):
+                s = data[i * ictal_ovl_len : i * ictal_ovl_len + window_len, :]
+                stft_data = self._compute_stft(s, DataSampleSize)
+                X.append(stft_data)
+                y.append(2) # Special label for overlapped preictal data
+                sequences.append(sequence)
+                i += 1
+        
+        return X, y, sequences
+
+    def _compute_stft(self, s, DataSampleSize):
+        """Computes the Short-Time Fourier Transform of a signal."""
+        stft_data = stft.spectrogram(s, framelength=DataSampleSize, centered=False)
+        stft_data = np.log10(np.abs(stft_data[1:, :, :]) + 1e-6)
+        stft_data[stft_data <= 0] = 0
+        stft_data = np.transpose(stft_data, (2, 1, 0))
+        return stft_data.reshape(-1, 1, *stft_data.shape)
 
     def preprocess_Kaggle(self, data_):
+        """Processes Kaggle competition data, including STFT computation."""
         ictal = self.type == 'ictal'
         interictal = self.type == 'interictal'
-       
-        if 'Dog_' in self.target:
-            targetFrequency = 200   #re-sample to target frequency
-            DataSampleSize = targetFrequency
-            numts = 30
+
+        targetFrequency = 200 if 'Dog_' in self.target else 1000
+        DataSampleSize = targetFrequency if 'Dog_' in self.target else int(targetFrequency / 5)
+        numts = 30
+        
+        df_sampling = pd.read_csv('sampling_Kaggle2014Pred.csv')
+        ictal_ovl_pt = df_sampling[df_sampling.Subject == self.target].ictal_ovl.values[0]
+        ictal_ovl_len = int(targetFrequency * ictal_ovl_pt * numts)
+
+        X_all, y_all, sequences_all = [], [], []
+        y_value = 1 if ictal else 0
+        
+        for segment in data_:
+            X_seg, y_seg, sequences_seg = self._process_single_segment(segment, y_value, DataSampleSize, numts, ictal_ovl_len if ictal else 0)
+            X_all.extend(X_seg)
+            y_all.extend(y_seg)
+            sequences_all.extend(sequences_seg)
+
+        if ictal:
+            X_all, y_all = group_seizure(X_all, y_all, sequences_all)
+            print('X', len(X_all), X_all[0].shape)
+            return X_all, y_all
         else:
-            targetFrequency = 1000
-            DataSampleSize = int(targetFrequency/5)
-            numts = 30
-    
-        sampleSizeinSecond = 600
-
-        df_sampling = pd.read_csv(
-            'sampling_Kaggle2014Pred.csv',
-            header=0,index_col=None)
-        trg = self.target
-        print (df_sampling)
-        print (df_sampling[df_sampling.Subject==trg].ictal_ovl.values)
-        ictal_ovl_pt = \
-            df_sampling[df_sampling.Subject==trg].ictal_ovl.values[0]
-        ictal_ovl_len = int(targetFrequency*ictal_ovl_pt*numts)
-
-        def process_raw_data(mat_data):
-            print ('Loading data')
-            X = []
-            y = []
-            sequences = []
-            #scale_ = scale_coef[target]
-            for segment in mat_data:
-                for skey in segment.keys():
-                    if "_segment_" in skey.lower():
-                        mykey = skey
-                if ictal:
-                    y_value=1
-                    sequence = segment[mykey][0][0][4][0][0]
-                else:
-                    y_value=0
-
-                data = segment[mykey][0][0][0]
-
-                '''
-                if self.target == 'Dog_5':
-                    m, n = data.shape
-                    new_channel = np.copy(data[-1, :])
-                    new_channel = new_channel.reshape((1, n))
-                    data = np.vstack((data, new_channel))
-                '''
-                sampleFrequency = segment[mykey][0][0][2][0][0]
-
-                if sampleFrequency > targetFrequency:   #resample to target frequency
-                    data = resample(data, targetFrequency*sampleSizeinSecond, axis=-1)
-
-                data = data.transpose()
-
-                from mne.filter import notch_filter
-
-                totalSample = int(data.shape[0]/DataSampleSize/numts) + 1
-                window_len = int(DataSampleSize*numts)
-                #print ('DEBUG: window_len, totalSample', window_len, totalSample)
-                for i in range(totalSample):
-
-                    if (i+1)*window_len <= data.shape[0]:
-                        s = data[i*window_len:(i+1)*window_len,:]
-                        stft_data = stft.spectrogram(s,framelength=DataSampleSize,centered=False)
-                        stft_data = stft_data[1:,:,:]
-                        stft_data = np.log10(stft_data)
-                        indices = np.where(stft_data <= 0)
-                        stft_data[indices] = 0
-                        stft_data = np.transpose(stft_data,(2,1,0))
-                        stft_data = np.abs(stft_data)+1e-6
-
-
-                        stft_data = stft_data.reshape(-1, 1, stft_data.shape[0],stft_data.shape[1],stft_data.shape[2])
-
-                        X.append(stft_data)
-                        y.append(y_value)
-                        if ictal:
-                            sequences.append(sequence)
-
-                if ictal:
-                    #print ('Generating more preictal samples....')
-                    #overlapped window
-                    i=1
-                    while (window_len + (i + 1)*ictal_ovl_len <= data.shape[0]):
-                        s = data[i*ictal_ovl_len:i*ictal_ovl_len + window_len, :]
-
-                        stft_data = stft.spectrogram(s, framelength=DataSampleSize,centered=False)
-
-                        stft_data = stft_data[1:,:,:]
-                        stft_data = np.log10(stft_data)
-                        indices = np.where(stft_data <= 0)
-                        stft_data[indices] = 0
-                        stft_data = np.transpose(stft_data, (2, 1, 0))
-                        stft_data = np.abs(stft_data)+1e-6
-
-                        stft_data = stft_data.reshape(-1, 1, stft_data.shape[0], stft_data.shape[1], stft_data.shape[2])
-
-                        X.append(stft_data)
-                        y.append(2)
-                        sequences.append(sequence)
-                        i += 1
-
-            if ictal:
-                assert len(X) == len(y)
-                assert len(X) == len(sequences)
-                X, y = group_seizure(X, y, sequences)
-                print ('X', len(X), X[0].shape)
-                return X, y
-            elif interictal:
-                X = np.concatenate(X)
-                y = np.array(y)
-                print ('X', X.shape, 'y', y.shape)
-                return X, y
-            else:
-                X = np.concatenate(X)
-                print ('X', X.shape)
-                return X, None
-
-        data = process_raw_data(data_)
-        return data
+            X_all = np.concatenate(X_all) if X_all else np.array([])
+            y_all = np.array(y_all)
+            print('X', X_all.shape, 'y', y_all.shape)
+            return X_all, y_all if interictal else None
 
     def apply(self):
-        filename = '%s_%s' % (self.type, self.target)
-        cache = load_hickle_file(
-            os.path.join(self.settings['cachedir'], filename))
+        """Applies preprocessing to the data, using cached results if available."""
+        filename = f'{self.type}_{self.target}'
+        cache_path = os.path.join(self.settings['cachedir'], filename)
+        
+        cache = load_hickle_file(cache_path)
         if cache is not None:
             return cache
 
         data = self.read_raw_signal()
-        if self.settings['dataset']=='Kaggle2014':
+        
+        if self.settings['dataset'] == 'Kaggle2014':
             X, y = self.preprocess_Kaggle(data)
         else:
-            X, y = self.preprocess(data)
-        save_hickle_file(
-            os.path.join(self.settings['cachedir'], filename),
-            [X, y])
-        return X, y
+            X, y = self.preprocess(data) # Assuming a generic preprocess method exists
 
+        save_hickle_file(cache_path, [X, y])
+        return X, y

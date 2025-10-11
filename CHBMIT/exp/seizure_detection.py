@@ -11,155 +11,148 @@ import matplotlib.pyplot as plt
 from utils.model_stuff import EarlyStopping
 from utils.load_signals_teacher import PrepDataTeacher
 from utils.prep_data_teacher import train_val_test_split_continual_t
-from models.model import CNN_LSTM_Model
+from models.models import CNN_LSTM_Model
 
+# --- Helper Functions ---
 
-def train_teacher_model(target, epochs, optimizer_type, patience):
-    """
-    Trains and evaluates a seizure detection model for a given patient.
+def _prepare_data(target, device):
+    """Loads, splits, and prepares data into a DataLoader and test tensors."""
+    with open('teacher_settings.json', 'r') as k:
+        settings = json.load(k)
+    
+    ictal_X, ictal_y = PrepDataTeacher(target, 'ictal', settings).apply()
+    interictal_X, interictal_y = PrepDataTeacher(target, 'interictal', settings).apply()
 
-    Args:
-        target (str): Patient identifier.
-        epochs (int): Number of training epochs.
-        optimizer_type (str): Optimizer type, either 'SGD' or 'Adam'.
-        patience (int): Early stopping patience.
-
-    Returns:
-        float: AUC-ROC score of the trained model.
-    """
-    print(f'\nTraining Teacher Model: Patient {target} | Epochs: {epochs} | Optimizer: {optimizer_type} | Patience: {patience}')
-    torch.cuda.empty_cache()
-
-    # Load teacher model settings
-    with open('teacher_settings.json') as k:
-        teacher_settings = json.load(k)
-
-    early_stopping = EarlyStopping(patience=patience, mode='min')
-    teacher_losses = []
-
-    # Load ictal and interictal data
-    ictal_X, ictal_y = PrepDataTeacher(target, type='ictal', settings=teacher_settings).apply()
-    interictal_X, interictal_y = PrepDataTeacher(target, type='interictal', settings=teacher_settings).apply()
-
-    # Split into training and testing sets
     X_train, y_train, X_test, y_test = train_val_test_split_continual_t(
         ictal_X, ictal_y, interictal_X, interictal_y, 0.35
     )
 
-    # Initialize the teacher model
-    teacher = CNN_LSTM_Model(X_train.shape).to('cuda')
-
-    # Convert training data to PyTorch tensors and move to GPU
-    Y_train = torch.tensor(y_train).long().to('cuda')
-    X_train = torch.tensor(X_train).float().to('cuda')
-
-    # Create a DataLoader for the training set
-    train_dataset = TensorDataset(X_train, Y_train)
+    X_train_tensor = torch.tensor(X_train, dtype=torch.float32).to(device)
+    y_train_tensor = torch.tensor(y_train, dtype=torch.long).to(device)
+    train_dataset = TensorDataset(X_train_tensor, y_train_tensor)
     train_loader = DataLoader(dataset=train_dataset, batch_size=32, shuffle=False)
+    
+    X_test_tensor = torch.tensor(X_test, dtype=torch.float32).to(device)
+    y_test_tensor = torch.tensor(y_test, dtype=torch.long).to(device)
+    
+    return train_loader, X_test_tensor, y_test_tensor, X_train_tensor.shape
 
-    # Define loss function
-    ce_loss = nn.CrossEntropyLoss()
-
-    # Select optimizer
+def _build_model_and_optimizer(input_shape, optimizer_type, device):
+    """Initializes the model and its optimizer."""
+    model = CNN_LSTM_Model(input_shape).to(device)
     if optimizer_type == 'Adam':
-        optimizer = torch.optim.Adam(teacher.parameters(), lr=5e-4, betas=(0.9, 0.999), eps=1e-8)
+        optimizer = torch.optim.Adam(model.parameters(), lr=5e-4, betas=(0.9, 0.999), eps=1e-8)
     else:  # Default to SGD
-        optimizer = torch.optim.SGD(teacher.parameters(), lr=5e-4, momentum=0.9)
+        optimizer = torch.optim.SGD(model.parameters(), lr=5e-4, momentum=0.9)
+    return model, optimizer
 
-    pbar = tqdm(total=epochs, desc=f"Training Teacher Model for Patient {target}")
+def _train_epoch(model, data_loader, criterion, optimizer, device):
+    """Runs a single training epoch and returns the average loss."""
+    model.train()
+    total_loss = 0
+    for X_batch, Y_batch in data_loader:
+        optimizer.zero_grad()
+        logits = model(X_batch)
+        loss = criterion(logits, Y_batch)
+        loss.backward()
+        optimizer.step()
+        total_loss += loss.item()
+    return total_loss / len(data_loader)
 
-    # Training loop
+def _run_training_loop(model, loader, optimizer, epochs, patience, device, pbar):
+    """Executes the training process with early stopping."""
+    criterion = nn.CrossEntropyLoss()
+    early_stopping = EarlyStopping(patience=patience, mode='min')
+    losses = []
+
     for epoch in range(epochs):
-        teacher.train()
-        total_loss = 0
-
-        for X_batch, Y_batch in train_loader:
-            X_batch, Y_batch = X_batch.to("cuda"), Y_batch.to("cuda")
-
-            # Forward pass
-            teacher_logits = teacher(X_batch)
-            loss = ce_loss(teacher_logits, Y_batch)
-
-            # Backward pass and optimization
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-
-            total_loss += loss.item()
-
+        avg_loss = _train_epoch(model, loader, criterion, optimizer, device)
+        losses.append(avg_loss)
         pbar.update(1)
-
-        # Track loss for early stopping
-        avg_loss = total_loss / len(train_loader)
-        teacher_losses.append(avg_loss)
+        
         early_stopping.step(avg_loss, epoch)
-
         if early_stopping.is_stopped():
-            print(f"Early stopping at epoch {epoch} with best loss {early_stopping.best_loss:.4f}")
+            print(f"\nEarly stopping at epoch {epoch+1} with best loss {early_stopping.best_loss:.4f}")
             break
+    return losses
 
-    pbar.close()
-
-    # Evaluate the model on the test set
-    teacher.eval()
-    X_tensor = torch.tensor(X_test).float().to('cuda')
-    y_tensor = torch.tensor(y_test).long().to('cuda')
-
+def _evaluate_model(model, X_test, y_test):
+    """Evaluates the trained model and returns the AUC score."""
+    model.eval()
     with torch.no_grad():
-        predictions = teacher(X_tensor)
+        predictions = model(X_test)
+    
+    y_probs = F.softmax(predictions, dim=1)[:, 1].cpu().numpy()
+    y_true = y_test.cpu().numpy()
+    return roc_auc_score(y_true, y_probs)
 
-    # Convert model outputs to probabilities and compute AUC score
-    predictions = F.softmax(predictions, dim=1)[:, 1].cpu().numpy()
-    auc_test = roc_auc_score(y_tensor.cpu(), predictions)
-
-    print(f'Patient {target} - Test AUC: {auc_test:.4f}')
-
-    # Save the trained teacher model
+def _save_and_plot(model, target, losses):
+    """Saves the model and plots the training loss."""
     model_path = f'pytorch_models/Patient_{target}_detection'
-    torch.save(teacher, model_path)
-
-    # Plot training loss
-    plt.plot(teacher_losses, label=f'Patient {target} Loss')
+    torch.save(model, model_path)
+    
+    plt.figure()
+    plt.plot(losses, label=f'Patient {target} Loss')
     plt.legend()
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
     plt.title(f'Training Loss for Patient {target}')
-    # Uncomment the line below to display the plot:
-    # plt.show()
+    # plt.show() # Uncomment to display plots during execution
 
+# --- Main Training Function ---
+
+def train_teacher_model(target, epochs, optimizer_type, patience):
+    """
+    Trains and evaluates a seizure detection model for a given patient.
+    (Function signature remains unchanged)
+    """
+    print(f'\nTraining Teacher Model: Patient {target} | Epochs: {epochs} | Optimizer: {optimizer_type} | Patience: {patience}')
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    torch.cuda.empty_cache()
+
+    loader, X_test, y_test, shape = _prepare_data(target, device)
+    teacher, optimizer = _build_model_and_optimizer(shape, optimizer_type, device)
+
+    with tqdm(total=epochs, desc=f"Training Teacher for Patient {target}") as pbar:
+        losses = _run_training_loop(teacher, loader, optimizer, epochs, patience, device, pbar)
+        
+    auc_test = _evaluate_model(teacher, X_test, y_test)
+    print(f'Patient {target} - Test AUC: {auc_test:.4f}')
+
+    _save_and_plot(teacher, target, losses)
+    
     return auc_test
 
+# --- Execution Block ---
 
-if __name__ == "__main__":
-    """
-    Main execution loop that takes command-line arguments for:
-    - Patient ID (or 'all' for multiple patients)
-    - Number of epochs
-    - Optimizer type (SGD or Adam)
-    - Early stopping patience
-    """
-
+def main():
+    """Main execution function to parse arguments and run training."""
     parser = argparse.ArgumentParser(description="Seizure Detection Model Training")
-    parser.add_argument("--patient", type=str, required=True,
-                        help="Target patient ID (use 'all' to train for all patients)")
-    parser.add_argument("--epochs", type=int, default=50, help="Number of training epochs (default: 50)")
-    parser.add_argument("--optimizer", type=str, choices=['SGD', 'Adam'], default='SGD',
-                        help="Optimizer type: 'SGD' or 'Adam' (default: SGD)")
-    parser.add_argument("--patience", type=int, default=5, help="Early stopping patience (default: 5)")
-
+    parser.add_argument("--patient", type=str, required=True, help="Patient ID (or 'all')")
+    parser.add_argument("--epochs", type=int, default=50, help="Max training epochs")
+    parser.add_argument("--optimizer", type=str, choices=['SGD', 'Adam'], default='SGD', help="Optimizer")
+    parser.add_argument("--patience", type=int, default=5, help="Early stopping patience")
     args = parser.parse_args()
 
-    # List of patients to train models for
-    patient_list = ['1', '2', '3', '5', '9', '10', '13', '18', '19', '20', '21', '23']
-    if args.patient != 'all':
-        patient_list = [args.patient]
-
+    default_patients = ['1', '2', '3', '5', '9', '10', '13', '18', '19', '20', '21', '23']
+    patients_to_run = default_patients if args.patient == 'all' else [args.patient]
+    
     results = {}
+    for patient in patients_to_run:
+        results[patient] = train_teacher_model(patient, args.epochs, args.optimizer, args.patience)
 
-    for patient in patient_list:
-        auc = train_teacher_model(patient, args.epochs, args.optimizer, args.patience)
-        results[patient] = auc
+    # Save results to a structured JSON file
+    try:
+        with open("Detection_results.json", 'r') as f:
+            existing_results = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        existing_results = {}
+    
+    existing_results.update(results)
+    with open("Detection_results.json", 'w') as f:
+        json.dump(existing_results, f, indent=4)
+        
+    print("\nTraining complete. Results saved to Detection_results.json")
 
-    # Save results to file
-    with open('Detection_results.txt', 'a') as f:
-        f.write(f'{str(results)}\n')
+if __name__ == "__main__":
+    main()
