@@ -72,20 +72,20 @@ class MackeyGlass(Dataset):
 
 class RNN(nn.Module):
     """A simple multi-layer RNN with a linear output layer for regression."""
-    def __init__(self, input_size, hidden_size, output_size, num_layers=2, lr=None):
+    def __init__(self, lookback_window, hidden_size, output_size, num_layers=2, lr=None):
         super(RNN, self).__init__()
-        self.rnn = nn.RNN(input_size, hidden_size, num_layers, batch_first=True, dropout=0.2)
-        self.fc = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size),
-            nn.ReLU(),
-            nn.Linear(hidden_size, output_size)
-        )
-
+        self.rnn = nn.RNN(1, hidden_size, num_layers, batch_first=True, dropout=0.2)
+        self.fc = nn.Linear(hidden_size * lookback_window, output_size)
+            
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        
     def forward(self, x):
         h0 = torch.zeros(self.rnn.num_layers, x.size(0), self.rnn.hidden_size).to(x.device)
         out, _ = self.rnn(x, h0)
         # Pass the output of the last time step to the classifier
-        out = self.fc(out[:, -1, :])
+        out = out.reshape(out.size(0), -1)  
+        out = self.fc(out)      
         return out
 
 # --- Data Preparation ---
