@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-
 import warnings
 warnings.filterwarnings(
     "ignore",
@@ -18,7 +17,7 @@ import torch.nn.functional as F
 import numpy as np
 from tqdm import tqdm
 
-from utils import MackeyGlass, RNN, create_time_series_dataset, plot_predictions, KL
+from utils.utils import RNN, create_time_series_dataset, KL
 
 # —— Device setup ——
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -113,7 +112,6 @@ def evaluate(model, loader, use_ph=False,
 
     return sum(errors) / len(errors)
 
-
 def train_student_model(student_horizon, alpha, num_bins, val_size, test_size, 
                         epochs, temperature, lookback_window, batch_size,
                         use_ph=False, ph_delta=0.005, ph_lambda=1.0, ph_window=50, 
@@ -134,13 +132,27 @@ def train_student_model(student_horizon, alpha, num_bins, val_size, test_size,
         data = pickle.load(f)
 
     # prepare datasets
+    # teacher (1-step, offset=H-1)
     teacher_train, teacher_val, teacher_test, _, _ = create_time_series_dataset(
-        data, lookback_window, 1,
-        num_bins, 0.25, offset=student_horizon-1, batch_size=batch_size
+        data=data, 
+        lookback_window=lookback_window, 
+        forecasting_horizon=1,
+        num_bins=num_bins, 
+        val_size=val_size,
+        test_size=test_size,
+        offset=student_horizon-1, 
+        batch_size=batch_size
     )
+    # student (H-step, offset=0)
     student_train, student_val, student_test, _, _ = create_time_series_dataset(
-        data, lookback_window, student_horizon,
-        num_bins, 0.25, offset=0, batch_size=batch_size
+        data=data, 
+        lookback_window=lookback_window, 
+        forecasting_horizon=student_horizon,
+        num_bins=num_bins, 
+        val_size=val_size,
+        test_size=test_size,
+        offset=0, 
+        batch_size=batch_size
     )
 
     mse    = nn.MSELoss()
@@ -155,7 +167,7 @@ def train_student_model(student_horizon, alpha, num_bins, val_size, test_size,
         teacher.train()
         for _, x, y in teacher_train:
             x = x.float().to(device).view(-1,1,lookback_window)
-            y = y.long().to(device).squeeze(-1)
+            y = y.long().to(device)
             loss = celoss(teacher(x), y)
             opt_t.zero_grad(); loss.backward(); opt_t.step()
 
@@ -165,9 +177,9 @@ def train_student_model(student_horizon, alpha, num_bins, val_size, test_size,
         with torch.no_grad():
             for _, x, y in teacher_val:
                 x = x.float().to(device).view(-1,1,lookback_window)
-                y = y.float().to(device).squeeze(-1)
-                pred = teacher(x).argmax(dim=1).float()
-                val_loss += mse(pred, y).item()
+                y = y.long().to(device)
+                pred = teacher(x)
+                val_loss += celoss(pred, y).item()
         val_loss /= len(teacher_val)
 
         if stop_t.step(val_loss, teacher):
@@ -186,8 +198,9 @@ def train_student_model(student_horizon, alpha, num_bins, val_size, test_size,
         baseline.train()
         for _, x, y in student_train:
             x = x.float().to(device).view(-1,1,lookback_window)
-            y = y.long().to(device).squeeze(-1)
-            loss = celoss(baseline(x), y)
+            y = y.long().to(device)
+            out = baseline(x)
+            loss = celoss(out, y)
             opt_b.zero_grad(); loss.backward(); opt_b.step()
 
         baseline.eval()
@@ -195,9 +208,9 @@ def train_student_model(student_horizon, alpha, num_bins, val_size, test_size,
         with torch.no_grad():
             for _, x, y in student_val:
                 x = x.float().to(device).view(-1,1,lookback_window)
-                y = y.float().to(device).squeeze(-1)
-                pred = baseline(x).argmax(dim=1).float()
-                val_loss += mse(pred, y).item()
+                y = y.long().to(device)
+                pred = baseline(x)
+                val_loss += celoss(pred, y).item()
         val_loss /= len(student_val)
 
         if stop_b.step(val_loss, baseline):
@@ -216,7 +229,7 @@ def train_student_model(student_horizon, alpha, num_bins, val_size, test_size,
         student.train()
         for (i_s, x_s, y_s), (_, x_t, _) in zip(student_train, teacher_train):
             x_s = x_s.float().to(device).view(-1,1,lookback_window)
-            y_s = y_s.long().to(device).squeeze(-1)
+            y_s = y_s.long().to(device)
             with torch.no_grad():
                 logits_t = teacher(x_t.float().to(device).view(-1,1,lookback_window))
             loss = alpha * celoss(student(x_s), y_s) + KL(student(x_s), logits_t, temperature, alpha)
@@ -227,8 +240,9 @@ def train_student_model(student_horizon, alpha, num_bins, val_size, test_size,
         with torch.no_grad():
             for _, x, y in student_val:
                 x = x.float().to(device).view(-1,1,lookback_window)
-                pred = student(x).argmax(dim=1).float()
-                val_loss += mse(pred, y.float().to(device).squeeze(-1)).item()
+                y = y.long().to(device)
+                pred = student(x)
+                val_loss += celoss(pred, y).item()
         val_loss /= len(student_val)
 
         if stop_s.step(val_loss, student):
@@ -255,7 +269,7 @@ def train_student_model(student_horizon, alpha, num_bins, val_size, test_size,
 
 
 if __name__ == "__main__":
-    
+    '''
     parser = argparse.ArgumentParser(
         description="Future-Guided Learning for Time-Series Forecasting"
     )
@@ -307,7 +321,7 @@ if __name__ == "__main__":
         ph_retrain_epochs  = args.ph_retrain_epochs,
         patience           = args.patience
     )
-    '''
+    
     PH Params
     Bins=25
     delta=0.130033
@@ -315,11 +329,13 @@ if __name__ == "__main__":
     Bins=50
     delta=5.775345
     lambda_thr=7.836623
-    
+    '''
     for i in range(2, 16):
         train_student_model(student_horizon=i,
                             alpha=0.0,
                             num_bins=25,
+                            val_size=0.2,
+                            test_size=0.2,
                             epochs=50,
                             temperature=4,
                             lookback_window=8,
@@ -330,4 +346,4 @@ if __name__ == "__main__":
                             ph_window=3,
                             ph_retrain_epochs=3,
                             patience=5)
-    '''
+    
