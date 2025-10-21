@@ -72,7 +72,7 @@ class MackeyGlass(Dataset):
 
 class RNN(nn.Module):
     """A simple multi-layer RNN with a linear output layer for regression."""
-    def __init__(self, input_size, hidden_size, output_size, num_layers=2):
+    def __init__(self, input_size, hidden_size, output_size, num_layers=2, lr=None):
         super(RNN, self).__init__()
         self.rnn = nn.RNN(input_size, hidden_size, num_layers, batch_first=True, dropout=0.2)
         self.fc = nn.Sequential(
