@@ -161,8 +161,13 @@ def create_time_series_dataset(data, lookback_window, forecasting_horizon, num_b
     if not MSE:
         bin_edges = np.linspace(y_train.min(), y_train.max(), num_bins)
         y_train = np.digitize(y_train, bin_edges)
+        y_train = np.clip(y_train, 0, num_bins - 1)
+
         y_val = np.digitize(y_val, bin_edges)
+        y_val = np.clip(y_val, 0, num_bins - 1)
+
         y_test = np.digitize(y_test, bin_edges)
+        y_test = np.clip(y_test, 0, num_bins - 1)
 
     # 5. Create DataLoaders
     def create_loader(X_arr, y_arr):
