@@ -87,9 +87,9 @@ def train_student_model(student_horizon, alpha, num_bins,
         teacher.train()
         for _, x, y in teacher_train:
             x = x.float().to(device).view(-1,1,lookback_window)
-            y = y.long().to(device).squeeze(-1)
+            y = y.long().to(device) 
             out = teacher(x)
-            loss= celoss(out, y)
+            loss = celoss(out, y)
             opt_t.zero_grad(); loss.backward(); opt_t.step()
 
         # validate
@@ -98,9 +98,9 @@ def train_student_model(student_horizon, alpha, num_bins,
             val_loss = 0.
             for _, x, y in teacher_val:
                 x = x.float().to(device).view(-1,1,lookback_window)
-                y = y.float().to(device).squeeze(-1)
-                pred = teacher(x).argmax(dim=1).float()
-                val_loss += mse(pred, y).item()
+                y = y.long().to(device)
+                out = teacher(x)
+                val_loss += celoss(out, y).item()
             val_loss /= len(teacher_val)
 
         #print(f"[Teacher] Epoch {epoch+1}: Val MSE={val_loss:.4f}")
@@ -108,7 +108,7 @@ def train_student_model(student_horizon, alpha, num_bins,
             print(f"[Teacher] Early stopping at epoch {epoch+1}")
             break
     stop_t.restore(teacher)
-    print(f"[Teacher] Best Val MSE = {stop_t.best_loss:.4f}")
+    print(f"[Teacher] Best Val CE = {stop_t.best_loss:.4f}")
 
     # ---- Baseline loop with early stopping ----
     baseline   = RNN(lookback_window, hidden_size, output_size, num_layers).to(device)
@@ -118,9 +118,9 @@ def train_student_model(student_horizon, alpha, num_bins,
         baseline.train()
         for _, x, y in student_train:
             x = x.float().to(device).view(-1,1,lookback_window)
-            y = y.long().to(device).squeeze(-1)
+            y = y.long().to(device)
             out = baseline(x)
-            loss= celoss(out, y)
+            loss = celoss(out, y)
             opt_b.zero_grad(); loss.backward(); opt_b.step()
 
         # validate
@@ -129,9 +129,9 @@ def train_student_model(student_horizon, alpha, num_bins,
             val_loss = 0.
             for _, x, y in student_val:
                 x = x.float().to(device).view(-1,1,lookback_window)
-                y = y.float().to(device).squeeze(-1)
-                pred = baseline(x).argmax(dim=1).float()
-                val_loss += mse(pred, y).item()
+                y = y.long().to(device)
+                out = baseline(x)
+                val_loss += celoss(out, y).item()
             val_loss /= len(student_val)
 
         #print(f"[Baseline] Epoch {epoch+1}: Val MSE={val_loss:.4f}")
@@ -139,7 +139,7 @@ def train_student_model(student_horizon, alpha, num_bins,
             print(f"[Baseline] Early stopping at epoch {epoch+1}")
             break
     stop_b.restore(baseline)
-    print(f"[Baseline] Best Val MSE = {stop_b.best_loss:.4f}")
+    print(f"[Baseline] Best Val CE = {stop_b.best_loss:.4f}")
 
     # ---- Student + distillation loop w/ early stopping ----
     student = RNN(lookback_window, hidden_size, output_size, num_layers).to(device)
@@ -150,7 +150,7 @@ def train_student_model(student_horizon, alpha, num_bins,
         student.train()
         for (i_s, x_s, y_s), (i_t, x_t, y_t) in zip(student_train, teacher_train):
             x_s = x_s.float().to(device).view(-1,1,lookback_window)
-            targets = y_s.long().to(device).squeeze(-1)
+            targets = y_s.long().to(device)
             outputs = student(x_s)
 
             x_t = x_t.float().to(device).view(-1,1,lookback_window)
@@ -165,9 +165,10 @@ def train_student_model(student_horizon, alpha, num_bins,
         with torch.no_grad():
             val_loss = 0.
             for _, x, y in student_val:
-                x    = x.float().to(device).view(-1,1,lookback_window)
-                pred = student(x).argmax(dim=1).float()
-                val_loss += mse(pred, y.float().to(device).squeeze(-1)).item()
+                x = x.float().to(device).view(-1,1,lookback_window)
+                y = y.long().to(device)
+                out = student(x)
+                val_loss += celoss(out, y).item()
             val_loss /= len(student_val)
 
         #print(f"[Student] Epoch {epoch+1}: Val MSE={val_loss:.4f}")
@@ -175,9 +176,9 @@ def train_student_model(student_horizon, alpha, num_bins,
             print(f"[Student] Early stopping at epoch {epoch+1}")
             break
     stop_s.restore(student)
-    print(f"[Student] Best Val MSE = {stop_s.best_loss:.4f}")
+    print(f"[Student] Best Val CE = {stop_s.best_loss:.4f}")
 
-    # final test metrics
+    # final test metrics are in MSE
     def evaluate(model, loader):
         model.eval()
         tot = 0.
