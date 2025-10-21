@@ -10,7 +10,7 @@ mg_params = {
     'tau': 17,
     'constant_past': 0.9,
     'dt': 1.0,
-    'splits': (10000., 2000.), # 10,000 for training, 2,000 for testing
+    'splits': (10000., 0.), # 10,000 points split 60/20/20
     'seed_id': 42
 }
 
