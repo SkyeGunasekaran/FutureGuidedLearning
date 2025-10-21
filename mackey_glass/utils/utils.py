@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import TensorDataset, Dataset, DataLoader
 from jitcdde import jitcdde_lyap, y, t
 import matplotlib.pyplot as plt
 
