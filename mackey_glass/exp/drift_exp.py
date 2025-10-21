@@ -103,7 +103,7 @@ def evaluate(model, loader, use_ph=False, **kwargs):
     else:
         return _evaluate_with_page_hinkley(model, loader, kwargs)
     
-def _run_training_loop(model, train_loader, val_loader, optimizer, epochs, patience, lookback_window, model_name, is_distillation=False, **kwargs):
+def _run_training_loop(model, train_loader, val_loader, optimizer, epochs, patience, model_name, is_distillation=False, **kwargs):
     """A generic training and validation loop with early stopping."""
     stopper = EarlyStopper(patience=patience)
     for epoch in range(epochs):
@@ -132,7 +132,7 @@ def _run_training_loop(model, train_loader, val_loader, optimizer, epochs, patie
             optimizer.zero_grad(); loss.backward(); optimizer.step()
 
         # --- Validation Step ---
-        val_loss = evaluate(model, val_loader, lookback_window=lookback_window)
+        val_loss = evaluate(model, val_loader) 
         if stopper.step(val_loss, model):
             print(f"[{model_name}] Early stopping at epoch {epoch+1}")
             break
@@ -154,17 +154,17 @@ def train_student_model(student_horizon, alpha, num_bins, val_size, test_size, e
     
     # --- Train Models ---
     teacher = RNN(lookback_window, **hyperparams).to(device)
-    teacher = _run_training_loop(teacher, teacher_train, teacher_val, optim.Adam(teacher.parameters(), lr=hyperparams['lr']), epochs, patience, lookback_window, "Teacher")
+    teacher = _run_training_loop(teacher, teacher_train, teacher_val, optim.Adam(teacher.parameters(), lr=hyperparams['lr']), epochs, patience, "Teacher")
     
     baseline = RNN(lookback_window, **hyperparams).to(device)
-    baseline = _run_training_loop(baseline, student_train, student_val, optim.Adam(baseline.parameters(), lr=hyperparams['lr']), epochs, patience, lookback_window, "Baseline")
+    baseline = _run_training_loop(baseline, student_train, student_val, optim.Adam(baseline.parameters(), lr=hyperparams['lr']), epochs, patience, "Baseline")
 
     student = RNN(lookback_window, **hyperparams).to(device)
     distill_args = {'teacher': teacher, 'alpha': alpha, 'temp': temperature}
-    student = _run_training_loop(student, zip(student_train, teacher_train), student_val, optim.Adam(student.parameters(), lr=hyperparams['lr']), epochs, patience, lookback_window, "Student", is_distillation=True, **distill_args)
+    student = _run_training_loop(student, zip(student_train, teacher_train), student_val, optim.Adam(student.parameters(), lr=hyperparams['lr']), epochs, patience, "Student", is_distillation=True, **distill_args)
 
     # --- Final Evaluation ---
-    ph_args = {'delta': ph_delta, 'lambda_thr': ph_lambda, 'window_size': ph_window, 'retrain_epochs': ph_retrain_epochs, 'lr': hyperparams['lr'], 'lookback_window': lookback_window}
+    ph_args = {'delta': ph_delta, 'lambda_thr': ph_lambda, 'window_size': ph_window, 'retrain_epochs': ph_retrain_epochs, 'lr': hyperparams['lr']}
     teacher_mse = evaluate(teacher, teacher_test, use_ph, **ph_args)
     baseline_mse = evaluate(baseline, student_test, use_ph, **ph_args)
     student_mse = evaluate(student, student_test, use_ph, **ph_args)
