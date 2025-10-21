@@ -5,7 +5,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from tqdm import tqdm
-from utils import RNN, create_time_series_dataset, KL
+
+from utils.utils import RNN, create_time_series_dataset, KL
 
 # Check for GPU
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -39,7 +40,7 @@ class EarlyStopper:
             model.load_state_dict(self.best_state)
 
 def _run_training_loop(model, train_loader, val_loader, optimizer, epochs, patience, 
-                     lookback_window, model_name, is_distillation=False, **kwargs):
+                       lookback_window, model_name, is_distillation=False, **kwargs):
     """
     A generic training and validation loop with early stopping.
     Handles both standard training and knowledge distillation.
@@ -52,18 +53,26 @@ def _run_training_loop(model, train_loader, val_loader, optimizer, epochs, patie
         model.train()
         for batch_data in train_loader:
             if is_distillation:
-                # Unpack student and teacher batches
-                (_, x_s, y_s), (_, x_t, _) = batch_data
-                targets = y_s.long().to(device).squeeze(-1)
+                (x_s, y_s), (x_t, y_t) = batch_data 
+                
+                # Move to device
+                targets = y_s.long().to(device)
+                x_s = x_s.float().to(device)
+                x_t = x_t.float().to(device)
+                
                 with torch.no_grad():
-                    teacher_logits = kwargs['teacher'](x_t.float().to(device).view(-1, 1, lookback_window))
-                outputs = model(x_s.float().to(device).view(-1, 1, lookback_window))
+                    teacher_logits = kwargs['teacher'](x_t)
+                
+                outputs = model(x_s)
                 loss = kwargs['alpha'] * celoss(outputs, targets) + KL(outputs, teacher_logits, kwargs['temp'], kwargs['alpha'])
+            
             else:
                 # Standard training
-                _, x, y = batch_data
-                x = x.float().to(device).view(-1, 1, lookback_window)
-                y = y.long().to(device).squeeze(-1)
+                x, y = batch_data
+                
+                x = x.float().to(device)
+                y = y.long().to(device)
+                
                 outputs = model(x)
                 loss = celoss(outputs, y)
             
@@ -75,11 +84,14 @@ def _run_training_loop(model, train_loader, val_loader, optimizer, epochs, patie
         model.eval()
         val_loss = 0.
         with torch.no_grad():
-            for _, x, y in val_loader:
-                x = x.float().to(device).view(-1, 1, lookback_window)
-                y = y.float().to(device).squeeze(-1)
-                pred = model(x).argmax(dim=1).float()
-                val_loss += F.mse_loss(pred, y).item()
+            for x, y in val_loader:
+                
+                x = x.float().to(device)
+                y = y.long().to(device)
+                
+                outputs = model(x)
+                val_loss += celoss(outputs, y).item()
+                
         val_loss /= len(val_loader)
         
         if stopper.step(val_loss, model):
@@ -87,7 +99,7 @@ def _run_training_loop(model, train_loader, val_loader, optimizer, epochs, patie
             break
             
     stopper.restore(model)
-    print(f"[{model_name}] Best Val MSE = {stopper.best_loss:.4f}")
+    print(f"[{model_name}] Best Val Loss = {stopper.best_loss:.4f}")
     return model
 
 def _evaluate_on_test_set(model, loader, lookback_window):
@@ -95,11 +107,14 @@ def _evaluate_on_test_set(model, loader, lookback_window):
     model.eval()
     total_mse = 0.
     with torch.no_grad():
-        for _, x, y in loader:
-            x = x.float().to(device).view(-1, 1, lookback_window)
-            y = y.float().to(device).squeeze(-1)
+        for x, y in loader:
+            
+            x = x.float().to(device)
+            y = y.float().to(device) 
+            
             pred = model(x).argmax(dim=1).float()
             total_mse += F.mse_loss(pred, y).item()
+            
     return total_mse / len(loader)
 
 def train_student_model(student_horizon, alpha, num_bins, val_size, test_size, epochs,

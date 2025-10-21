@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import TensorDataset, Dataset, DataLoader
 from jitcdde import jitcdde_lyap, y, t
 import matplotlib.pyplot as plt
 
@@ -72,7 +72,7 @@ class MackeyGlass(Dataset):
 
 class RNN(nn.Module):
     """A simple multi-layer RNN with a linear output layer for regression."""
-    def __init__(self, input_size, hidden_size, output_size, num_layers=2):
+    def __init__(self, input_size, hidden_size, output_size, num_layers=2, lr=None):
         super(RNN, self).__init__()
         self.rnn = nn.RNN(input_size, hidden_size, num_layers, batch_first=True, dropout=0.2)
         self.fc = nn.Sequential(
@@ -161,8 +161,13 @@ def create_time_series_dataset(data, lookback_window, forecasting_horizon, num_b
     if not MSE:
         bin_edges = np.linspace(y_train.min(), y_train.max(), num_bins)
         y_train = np.digitize(y_train, bin_edges)
+        y_train = np.clip(y_train, 0, num_bins - 1)
+
         y_val = np.digitize(y_val, bin_edges)
+        y_val = np.clip(y_val, 0, num_bins - 1)
+
         y_test = np.digitize(y_test, bin_edges)
+        y_test = np.clip(y_test, 0, num_bins - 1)
 
     # 5. Create DataLoaders
     def create_loader(X_arr, y_arr):

@@ -61,9 +61,9 @@ def _evaluate_with_page_hinkley(model, loader, args):
     window = deque(maxlen=args['window_size'])
     errors = []
 
-    for _, x, y in loader:
-        x = x.float().to(device).view(-1, 1, args['lookback_window'])
-        y_int, y_float = y.long().to(device).squeeze(-1), y.float().to(device).squeeze(-1)
+    for x, y in loader:
+        x = x.float().to(device)
+        y_int, y_float = y.long().to(device), y.float().to(device)
 
         with torch.no_grad():
             pred_class = model(x).argmax(dim=1)
@@ -94,15 +94,15 @@ def evaluate(model, loader, use_ph=False, **kwargs):
     if not use_ph:
         total_mse = 0.0
         with torch.no_grad():
-            for _, x, y in loader:
-                x = x.float().to(device).view(-1, 1, kwargs['lookback_window'])
-                y_float = y.float().to(device).squeeze(-1)
+            for x, y in loader:
+                x = x.float().to(device)
+                y_float = y.float().to(device)
                 pred = model(x).argmax(dim=1).float()
                 total_mse += F.mse_loss(pred, y_float).item()
         return total_mse / len(loader)
     else:
         return _evaluate_with_page_hinkley(model, loader, kwargs)
-
+    
 def _run_training_loop(model, train_loader, val_loader, optimizer, epochs, patience, lookback_window, model_name, is_distillation=False, **kwargs):
     """A generic training and validation loop with early stopping."""
     stopper = EarlyStopper(patience=patience)
@@ -111,16 +111,24 @@ def _run_training_loop(model, train_loader, val_loader, optimizer, epochs, patie
         # --- Training Step ---
         for batch_data in train_loader:
             if is_distillation:
-                (_, x_s, y_s), (_, x_t, _) = batch_data
-                targets = y_s.long().to(device).squeeze(-1)
+                (x_s, y_s), (x_t, y_t) = batch_data
+                
+                targets = y_s.long().to(device)
+                x_s = x_s.float().to(device)
+                x_t = x_t.float().to(device)
+
                 with torch.no_grad():
-                    teacher_logits = kwargs['teacher'](x_t.float().to(device).view(-1, 1, lookback_window))
-                outputs = model(x_s.float().to(device).view(-1, 1, lookback_window))
+                    teacher_logits = kwargs['teacher'](x_t)
+                
+                outputs = model(x_s)
                 loss = kwargs['alpha'] * F.cross_entropy(outputs, targets) + KL(outputs, teacher_logits, kwargs['temp'], kwargs['alpha'])
+            
             else:
-                _, x, y = batch_data
-                x, y = x.float().to(device).view(-1, 1, lookback_window), y.long().to(device).squeeze(-1)
+                x, y = batch_data
+                
+                x, y = x.float().to(device), y.long().to(device)
                 loss = F.cross_entropy(model(x), y)
+            
             optimizer.zero_grad(); loss.backward(); optimizer.step()
 
         # --- Validation Step ---
