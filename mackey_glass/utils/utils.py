@@ -90,49 +90,96 @@ class RNN(nn.Module):
 
 # --- Data Preparation ---
 
-def _create_sliding_windows(x, y, lookback_window, forecasting_horizon):
-    """Converts a time-series into a dataset of sliding windows."""
-    X_windows, y_windows = [], []
-    limit = len(x) - lookback_window - forecasting_horizon + 1
-    for i in range(limit):
-        X_windows.append(x[i : i + lookback_window])
-        y_windows.append(y[i + lookback_window + forecasting_horizon - 1])
-    return np.stack(X_windows), np.stack(y_windows)
+def _create_sliding_windows_from_series(data, lookback_window, forecasting_horizon):
+    """
+    Creates sliding windows from a raw time-series.
+    
+    Args:
+        data (np.array): The raw time-series, shape (N,).
+        lookback_window (int): Number of past steps to use as input (X).
+        forecasting_horizon (int): The future step to predict (y). 
+                                 e.g., horizon=1 means predict t+1.
+    
+    Returns:
+        (np.array, np.array): X, y
+    """
+    X, y = [], []
+    N = len(data)
+    
+    # End point for window creation
+    # We need 'lookback_window' steps for X and 'forecasting_horizon' steps to find y
+    end_idx = N - lookback_window - forecasting_horizon + 1
+    
+    for i in range(end_idx):
+        X.append(data[i : i + lookback_window])
+        y.append(data[i + lookback_window + forecasting_horizon - 1]) # Predict the single point at the horizon
+    
+    return np.array(X), np.array(y)
+
 
 def create_time_series_dataset(data, lookback_window, forecasting_horizon, num_bins,
-                             val_size, test_size, offset=0, MSE=False, batch_size=1):
+                               val_size, test_size, offset=0, MSE=False, batch_size=1):
     """
-    Generates train/val/test DataLoaders from a raw time-series.
-    (Function signature remains unchanged)
-    """
-    x = np.array([pt[0] for pt in data])
-    y = np.array([pt[1] for pt in data])
-    X, y = _create_sliding_windows(x, y, lookback_window, forecasting_horizon)
+    Generates train/val/test DataLoaders from a raw time-series tensor.
     
-    # Chronological split
+    Args:
+        data (torch.Tensor or np.array): The raw time-series data, 
+                                         shape (N, 1) or (N,).
+    """
+    
+    # 1. Ensure data is a 1D numpy array
+    if hasattr(data, 'numpy'): # Check if it's a torch tensor
+        data = data.numpy()
+    data = data.squeeze() # Convert from (N, 1) to (N,)
+    if data.ndim != 1:
+        raise ValueError(f"Input data must be a 1D time-series, but got shape {data.shape}")
+
+    # 2. Create sliding windows from the raw series
+    X, y = _create_sliding_windows_from_series(data, lookback_window, forecasting_horizon)
+        
+    # 3. Chronological split
     N = X.shape[0]
+    if N == 0:
+        raise ValueError("Not enough data to create any sliding windows. "
+                         "Check data length, lookback, and horizon.")
+        
     n_test = int(N * test_size)
     n_val = int(N * val_size)
     n_train = N - n_val - n_test
     
+    if n_train <= 0:
+        raise ValueError("Not enough data for a training split. "
+                         "Adjust sizes or increase dataset length.")
+
     X_train, y_train = X[:n_train], y[:n_train]
     X_val, y_val = X[n_train:n_train + n_val], y[n_train:n_train + n_val]
     X_test, y_test = X[-n_test:], y[-n_test:]
 
     original_data_val, original_data_test = y_val.copy(), y_test.copy()
 
-    # Discretize targets into bins if not a regression task
+    # 4. Discretize targets
     if not MSE:
         bin_edges = np.linspace(y_train.min(), y_train.max(), num_bins)
         y_train = np.digitize(y_train, bin_edges)
         y_val = np.digitize(y_val, bin_edges)
         y_test = np.digitize(y_test, bin_edges)
 
+    # 5. Create DataLoaders
     def create_loader(X_arr, y_arr):
         if offset > 0:
             X_arr, y_arr = X_arr[offset:], y_arr[offset:]
-        # Use a simple custom dataset for tuples
-        dataset = list(zip(X_arr, y_arr))
+        
+        # Convert to Tensors for DataLoader
+        # We add a channel/feature dimension to X, as most models (RNN, CNN)
+        # expect input shape (batch, sequence_length, features)
+        X_tensor = torch.from_numpy(X_arr).float().unsqueeze(-1) # Shape: (batch, lookback, 1)
+        y_tensor = torch.from_numpy(y_arr).float()               # Shape: (batch,)
+        
+        if not MSE:
+            y_tensor = y_tensor.long() # Use Long for classification labels
+            
+        # Using TensorDataset is much more efficient than list(zip(...))
+        dataset = TensorDataset(X_tensor, y_tensor)
         return DataLoader(dataset, batch_size=batch_size, shuffle=False, drop_last=True)
 
     train_loader = create_loader(X_train, y_train)
