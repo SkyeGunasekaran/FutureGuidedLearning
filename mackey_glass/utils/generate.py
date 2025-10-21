@@ -23,7 +23,7 @@ time_series_data = mg_dataset.mackeyglass_soln
 print(f"Generation complete. Data shape: {time_series_data.shape}")
 
 # 3. Define the output filename
-output_filename = "mackey_glass_series.pkl"
+output_filename = "data.pkl"
 
 # 4. Save the tensor to a .pkl file
 with open(output_filename, 'wb') as f:
