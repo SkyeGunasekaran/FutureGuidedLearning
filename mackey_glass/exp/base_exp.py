@@ -40,7 +40,7 @@ class EarlyStopper:
             model.load_state_dict(self.best_state)
 
 def _run_training_loop(model, train_loader, val_loader, optimizer, epochs, patience, 
-                       lookback_window, model_name, is_distillation=False, **kwargs):
+                       model_name, is_distillation=False, **kwargs):
     """
     A generic training and validation loop with early stopping.
     Handles both standard training and knowledge distillation.
@@ -102,7 +102,7 @@ def _run_training_loop(model, train_loader, val_loader, optimizer, epochs, patie
     print(f"[{model_name}] Best Val Loss = {stopper.best_loss:.4f}")
     return model
 
-def _evaluate_on_test_set(model, loader, lookback_window):
+def _evaluate_on_test_set(model, loader):
     """Evaluates a trained model on the test set and returns the MSE."""
     model.eval()
     total_mse = 0.
@@ -146,7 +146,7 @@ def train_student_model(student_horizon, alpha, num_bins, val_size, test_size, e
     optimizer_t = torch.optim.Adam(teacher.parameters(), lr=hyperparams['lr'])
     teacher = _run_training_loop(
         teacher, teacher_train, teacher_val, optimizer_t, epochs, patience,
-        lookback_window, "Teacher"
+        "Teacher"  
     )
 
     # --- Train Baseline Model ---
@@ -154,7 +154,7 @@ def train_student_model(student_horizon, alpha, num_bins, val_size, test_size, e
     optimizer_b = torch.optim.Adam(baseline.parameters(), lr=hyperparams['lr'])
     baseline = _run_training_loop(
         baseline, student_train, student_val, optimizer_b, epochs, patience,
-        lookback_window, "Baseline"
+        "Baseline" 
     )
 
     # --- Train Student Model (with Distillation) ---
@@ -163,13 +163,13 @@ def train_student_model(student_horizon, alpha, num_bins, val_size, test_size, e
     distillation_params = {'teacher': teacher, 'alpha': alpha, 'temp': temperature}
     student = _run_training_loop(
         student, zip(student_train, teacher_train), student_val, optimizer_s,
-        epochs, patience, lookback_window, "Student", is_distillation=True, **distillation_params
+        epochs, patience, "Student", is_distillation=True, **distillation_params 
     )
 
     # --- Final Evaluation ---
-    Tmse = _evaluate_on_test_set(teacher, teacher_test, lookback_window)
-    Bmse = _evaluate_on_test_set(baseline, student_test, lookback_window)
-    Smse = _evaluate_on_test_set(student, student_test, lookback_window)
+    Tmse = _evaluate_on_test_set(teacher, teacher_test) 
+    Bmse = _evaluate_on_test_set(baseline, student_test) 
+    Smse = _evaluate_on_test_set(student, student_test) 
     print(f"\nFinal Test MSE:\n Teacher:  {Tmse:.4f}\n Baseline: {Bmse:.4f}\n Student:  {Smse:.4f}")
     
     return None
@@ -182,7 +182,7 @@ def main():
     parser.add_argument("--num_bins", type=int, default=50, help="Number of bins")
     parser.add_argument("--epochs", type=int, default=10, help="Training epochs")
     parser.add_argument("--temperature", type=float, default=4, help='Softness of teacher logits')
-    parser.add_argument("--lookback_window", type=int, default=1, help="Length of history fed to RNN")
+    parser.add_argument("--lookback_window", type=int, default=8, help="Length of history fed to RNN")
     parser.add_argument("--batch_size", type=int, default=1, help="Batch size")
     parser.add_argument("--val_size", type=float, default=0.2, help="Fraction for validation")
     parser.add_argument("--test_size", type=float, default=0.2, help="Fraction for testing")
