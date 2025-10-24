@@ -232,4 +232,8 @@ if __name__ == "__main__":
         temperature       = args.temperature,
         lookback_window   = args.lookback_window,
         batch_size        = args.batch_size
+<<<<<<< HEAD
     )
+=======
+    )
+>>>>>>> 07c6981c24b9b0cf889dc0ebfcffe739062da438

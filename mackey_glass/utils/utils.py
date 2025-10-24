@@ -319,4 +319,8 @@ def KL(student_logits, teacher_logits, temperature, alpha):
     p_t     = F.softmax(teacher_logits / temperature, dim=1)
     # batchmean KL and rescale by T^2
     kd = F.kl_div(log_p_s, p_t, reduction='batchmean') * (temperature ** 2)
+<<<<<<< HEAD
     return (1.0 - alpha) * kd
+=======
+    return (1.0 - alpha) * kd
+>>>>>>> 07c6981c24b9b0cf889dc0ebfcffe739062da438
