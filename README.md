@@ -159,3 +159,7 @@ If you find this work useful in your research, please consider citing our paper:
   doi = {10.1038/s41467-025-63786-4}
 }
 ```
+
+# 6. Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=SkyeGunasekaran/FutureGuidedLearning&type=date&legend=top-left)](https://www.star-history.com/#SkyeGunasekaran/FutureGuidedLearning&type=date&legend=top-left)
