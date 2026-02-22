@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 from utils.load_signals_student import PrepDataStudent
 from utils.prep_data_student import train_val_test_split_continual_s
 from models.model import CNN_LSTM_Model
-from models.MViT import MViT
+from models.model import MViT
 
 
 def find_best_threshold(y_true, y_pred):
@@ -45,18 +45,22 @@ def train_and_evaluate(target, trials, model_type, epochs=25):
     Returns:
         list: A list of results containing FPR, Sensitivity, and AUC-ROC for each trial.
     """
-    print(f'Training Model: {model_type} | Patient: {target} | Trials: {trials}')
+    print(f"Training Model: {model_type} | Patient: {target} | Trials: {trials}")
     torch.cuda.empty_cache()
 
     # Load student model settings
-    with open('student_settings.json') as k:
+    with open("student_settings.json") as k:
         student_settings = json.load(k)
 
     student_results = []
 
     # Load ictal and interictal data
-    ictal_X, ictal_y = PrepDataStudent(target, type='ictal', settings=student_settings).apply()
-    interictal_X, interictal_y = PrepDataStudent(target, type='interictal', settings=student_settings).apply()
+    ictal_X, ictal_y = PrepDataStudent(
+        target, type="ictal", settings=student_settings
+    ).apply()
+    interictal_X, interictal_y = PrepDataStudent(
+        target, type="interictal", settings=student_settings
+    ).apply()
 
     # Split into training and testing sets
     X_train, y_train, X_test, y_test = train_val_test_split_continual_s(
@@ -64,8 +68,8 @@ def train_and_evaluate(target, trials, model_type, epochs=25):
     )
 
     # Convert training data to PyTorch tensors and move to GPU
-    Y_train = torch.tensor(y_train).long().to('cuda')
-    X_train = torch.tensor(X_train).float().to('cuda')
+    Y_train = torch.tensor(y_train).long().to("cuda")
+    X_train = torch.tensor(X_train).float().to("cuda")
 
     # Create a DataLoader for the training set
     train_dataset = TensorDataset(X_train, Y_train)
@@ -73,10 +77,10 @@ def train_and_evaluate(target, trials, model_type, epochs=25):
 
     # Perform multiple training trials
     for trial in range(trials):
-        print(f'\nStarting Trial {trial + 1}/{trials} for Patient {target}...')
+        print(f"\nStarting Trial {trial + 1}/{trials} for Patient {target}...")
 
         # Initialize model
-        if model_type == 'MViT':
+        if model_type == "MViT":
             student = MViT(
                 X_shape=X_train.shape,
                 in_channels=X_train.shape[2],
@@ -86,16 +90,21 @@ def train_and_evaluate(target, trials, model_type, epochs=25):
                 num_heads=4,
                 hidden_dim=256,
                 num_layers=4,
-                dropout=0.1
-            ).to('cuda')
+                dropout=0.1,
+            ).to("cuda")
         else:
-            student = CNN_LSTM_Model(X_train.shape).to('cuda')
+            student = CNN_LSTM_Model(X_train.shape).to("cuda")
 
         # Define loss function and optimizer
         ce_loss = nn.CrossEntropyLoss()
-        optimizer = torch.optim.Adam(student.parameters(), lr=5e-4, betas=(0.9, 0.999), eps=1e-8)
+        optimizer = torch.optim.Adam(
+            student.parameters(), lr=5e-4, betas=(0.9, 0.999), eps=1e-8
+        )
 
-        pbar = tqdm(total=epochs, desc=f"Training {model_type} for Patient {target}, Trial {trial + 1}")
+        pbar = tqdm(
+            total=epochs,
+            desc=f"Training {model_type} for Patient {target}, Trial {trial + 1}",
+        )
 
         # Training loop
         for epoch in range(epochs):
@@ -119,8 +128,8 @@ def train_and_evaluate(target, trials, model_type, epochs=25):
 
         # Evaluate the trained model
         student.eval()
-        X_tensor = torch.tensor(X_test).float().to('cuda')
-        y_tensor = torch.tensor(y_test).long().to('cuda')
+        X_tensor = torch.tensor(X_test).float().to("cuda")
+        y_tensor = torch.tensor(y_test).long().to("cuda")
 
         with torch.no_grad():
             predictions = student(X_tensor)
@@ -141,10 +150,10 @@ def train_and_evaluate(target, trials, model_type, epochs=25):
         auc_roc = roc_auc_score(y_tensor.cpu(), predictions)
 
         # Log results
-        print(f'Patient {target}, Trial {trial + 1}:')
-        print(f'  False Positive Rate (FPR): {fpr:.2f}')
-        print(f'  Sensitivity: {sensitivity:.2f}')
-        print(f'  AUCROC: {auc_roc:.2f}')
+        print(f"Patient {target}, Trial {trial + 1}:")
+        print(f"  False Positive Rate (FPR): {fpr:.2f}")
+        print(f"  Sensitivity: {sensitivity:.2f}")
+        print(f"  AUCROC: {auc_roc:.2f}")
 
         student_results.append([fpr, sensitivity, auc_roc])
 
@@ -161,10 +170,19 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Seizure Prediction Model Training")
     parser.add_argument("--patient", type=str, required=True, help="Target patient ID")
-    parser.add_argument("--trials", type=int, default=3, help="Number of training trials (default: 3)")
-    parser.add_argument("--model", type=str, choices=['CNN_LSTM', 'MViT'], default='CNN_LSTM',
-                        help="Model type: 'CNN_LSTM' or 'MViT' (default: CNN_LSTM)")
-    parser.add_argument("--epochs", type=int, default=25, help="Number of training epochs (default: 25)")
+    parser.add_argument(
+        "--trials", type=int, default=3, help="Number of training trials (default: 3)"
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        choices=["CNN_LSTM", "MViT"],
+        default="CNN_LSTM",
+        help="Model type: 'CNN_LSTM' or 'MViT' (default: CNN_LSTM)",
+    )
+    parser.add_argument(
+        "--epochs", type=int, default=25, help="Number of training epochs (default: 25)"
+    )
 
     args = parser.parse_args()
 
@@ -172,5 +190,5 @@ if __name__ == "__main__":
     results = train_and_evaluate(args.patient, args.trials, args.model, args.epochs)
 
     # Save results to a text file
-    with open('Prediction_results.txt', 'a') as f:
-        f.write(f'Patient {args.patient} Results: {str(results)}\n')
+    with open("Prediction_results.txt", "a") as f:
+        f.write(f"Patient {args.patient} Results: {str(results)}\n")

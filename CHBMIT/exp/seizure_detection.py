@@ -1,3 +1,4 @@
+import os
 import argparse
 import json
 import torch
@@ -27,19 +28,25 @@ def train_teacher_model(target, epochs, optimizer_type, patience):
     Returns:
         float: AUC-ROC score of the trained model.
     """
-    print(f'\nTraining Teacher Model: Patient {target} | Epochs: {epochs} | Optimizer: {optimizer_type} | Patience: {patience}')
+    print(
+        f"\nTraining Teacher Model: Patient {target} | Epochs: {epochs} | Optimizer: {optimizer_type} | Patience: {patience}"
+    )
     torch.cuda.empty_cache()
 
     # Load teacher model settings
-    with open('teacher_settings.json') as k:
+    with open("teacher_settings.json") as k:
         teacher_settings = json.load(k)
 
-    early_stopping = EarlyStopping(patience=patience, mode='min')
+    early_stopping = EarlyStopping(patience=patience, mode="min")
     teacher_losses = []
 
     # Load ictal and interictal data
-    ictal_X, ictal_y = PrepDataTeacher(target, type='ictal', settings=teacher_settings).apply()
-    interictal_X, interictal_y = PrepDataTeacher(target, type='interictal', settings=teacher_settings).apply()
+    ictal_X, ictal_y = PrepDataTeacher(
+        target, type="ictal", settings=teacher_settings
+    ).apply()
+    interictal_X, interictal_y = PrepDataTeacher(
+        target, type="interictal", settings=teacher_settings
+    ).apply()
 
     # Split into training and testing sets
     X_train, y_train, X_test, y_test = train_val_test_split_continual_t(
@@ -47,11 +54,11 @@ def train_teacher_model(target, epochs, optimizer_type, patience):
     )
 
     # Initialize the teacher model
-    teacher = CNN_LSTM_Model(X_train.shape).to('cuda')
+    teacher = CNN_LSTM_Model(X_train.shape).to("cuda")
 
     # Convert training data to PyTorch tensors and move to GPU
-    Y_train = torch.tensor(y_train).long().to('cuda')
-    X_train = torch.tensor(X_train).float().to('cuda')
+    Y_train = torch.tensor(y_train).long().to("cuda")
+    X_train = torch.tensor(X_train).float().to("cuda")
 
     # Create a DataLoader for the training set
     train_dataset = TensorDataset(X_train, Y_train)
@@ -61,8 +68,10 @@ def train_teacher_model(target, epochs, optimizer_type, patience):
     ce_loss = nn.CrossEntropyLoss()
 
     # Select optimizer
-    if optimizer_type == 'Adam':
-        optimizer = torch.optim.Adam(teacher.parameters(), lr=5e-4, betas=(0.9, 0.999), eps=1e-8)
+    if optimizer_type == "Adam":
+        optimizer = torch.optim.Adam(
+            teacher.parameters(), lr=5e-4, betas=(0.9, 0.999), eps=1e-8
+        )
     else:  # Default to SGD
         optimizer = torch.optim.SGD(teacher.parameters(), lr=5e-4, momentum=0.9)
 
@@ -95,15 +104,17 @@ def train_teacher_model(target, epochs, optimizer_type, patience):
         early_stopping.step(avg_loss, epoch)
 
         if early_stopping.is_stopped():
-            print(f"Early stopping at epoch {epoch} with best loss {early_stopping.best_loss:.4f}")
+            print(
+                f"Early stopping at epoch {epoch} with best loss {early_stopping.best_loss:.4f}"
+            )
             break
 
     pbar.close()
 
     # Evaluate the model on the test set
     teacher.eval()
-    X_tensor = torch.tensor(X_test).float().to('cuda')
-    y_tensor = torch.tensor(y_test).long().to('cuda')
+    X_tensor = torch.tensor(X_test).float().to("cuda")
+    y_tensor = torch.tensor(y_test).long().to("cuda")
 
     with torch.no_grad():
         predictions = teacher(X_tensor)
@@ -112,18 +123,21 @@ def train_teacher_model(target, epochs, optimizer_type, patience):
     predictions = F.softmax(predictions, dim=1)[:, 1].cpu().numpy()
     auc_test = roc_auc_score(y_tensor.cpu(), predictions)
 
-    print(f'Patient {target} - Test AUC: {auc_test:.4f}')
+    print(f"Patient {target} - Test AUC: {auc_test:.4f}")
 
     # Save the trained teacher model
-    model_path = f'pytorch_models/Patient_{target}_detection'
+    if not os.path.exists(teacher_settings["checkptdir"]):
+        os.makedirs(teacher_settings["checkptdir"])
+        print(f"Checkpoints Directory created.")
+    model_path = f"{teacher_settings['checkptdir']}/Patient_{target}_detection"
     torch.save(teacher, model_path)
 
     # Plot training loss
-    plt.plot(teacher_losses, label=f'Patient {target} Loss')
+    plt.plot(teacher_losses, label=f"Patient {target} Loss")
     plt.legend()
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
-    plt.title(f'Training Loss for Patient {target}')
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.title(f"Training Loss for Patient {target}")
     # Uncomment the line below to display the plot:
     # plt.show()
 
@@ -140,18 +154,31 @@ if __name__ == "__main__":
     """
 
     parser = argparse.ArgumentParser(description="Seizure Detection Model Training")
-    parser.add_argument("--patient", type=str, required=True,
-                        help="Target patient ID (use 'all' to train for all patients)")
-    parser.add_argument("--epochs", type=int, default=50, help="Number of training epochs (default: 50)")
-    parser.add_argument("--optimizer", type=str, choices=['SGD', 'Adam'], default='SGD',
-                        help="Optimizer type: 'SGD' or 'Adam' (default: SGD)")
-    parser.add_argument("--patience", type=int, default=5, help="Early stopping patience (default: 5)")
+    parser.add_argument(
+        "--patient",
+        type=str,
+        required=True,
+        help="Target patient ID (use 'all' to train for all patients)",
+    )
+    parser.add_argument(
+        "--epochs", type=int, default=50, help="Number of training epochs (default: 50)"
+    )
+    parser.add_argument(
+        "--optimizer",
+        type=str,
+        choices=["SGD", "Adam"],
+        default="SGD",
+        help="Optimizer type: 'SGD' or 'Adam' (default: SGD)",
+    )
+    parser.add_argument(
+        "--patience", type=int, default=5, help="Early stopping patience (default: 5)"
+    )
 
     args = parser.parse_args()
 
     # List of patients to train models for
-    patient_list = ['1', '2', '3', '5', '9', '10', '13', '18', '19', '20', '21', '23']
-    if args.patient != 'all':
+    patient_list = ["1", "2", "3", "5", "9", "10", "13", "18", "19", "20", "21", "23"]
+    if args.patient != "all":
         patient_list = [args.patient]
 
     results = {}
@@ -161,5 +188,5 @@ if __name__ == "__main__":
         results[patient] = auc
 
     # Save results to file
-    with open('Detection_results.txt', 'a') as f:
-        f.write(f'{str(results)}\n')
+    with open("Detection_results.txt", "a") as f:
+        f.write(f"{str(results)}\n")

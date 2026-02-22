@@ -75,7 +75,7 @@ Teacher models are trained for **seizure detection** (identifying a seizure as i
     Train a separate detection model for each patient you wish to evaluate.
     ```bash
     # Example for Patient 1. Repeat for other patients (e.g., 3, 5, 10, etc.).
-    python seizure_detection.py --patient 1 --epochs 50 --patience 5
+    python -m exp.seizure_detection --patient 1 --epochs 50 --patience 5
     ```
 
 * **For AES (Universal Teachers):**
@@ -93,7 +93,7 @@ These models are trained for **seizure prediction** without any guidance from a 
     The `seizure_prediction.py` script is used to train the baseline models.
     ```bash
     # Example for a CHB-MIT patient
-    python seizure_prediction.py --subject Patient_1 --model MViT --trials 3
+    python -m exp.seizure_prediction --patient 1 --model MViT --trials 3
 
     # Example for an AES subject
     python seizure_prediction.py --subject Dog_1 --model CNN_LSTM --trials 3
@@ -105,7 +105,7 @@ This is the main experiment where student models are trained for seizure predict
 
 * **For CHB-MIT (using patient-specific teachers):**
     ```bash
-    python FGL_CHBMIT.py --target 1 --epochs 30 --trials 3 --optimizer Adam --alpha 0.5 --temperature 4
+    python -m exp.FGL_CHBMIT --patient 1 --epochs 30 --trials 3 --optimizer Adam --alpha 0.5 --temperature 4
     ```
 
 * **For AES (using universal teachers):**
