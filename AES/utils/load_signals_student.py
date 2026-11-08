@@ -10,7 +10,7 @@ from utils.group_seizure_student import group_seizure
 def makedirs(dir):
     try:
         os.makedirs(dir)
-    except:
+    except OSError:
         pass
 
 def calculate_interictal_hours(data_dir, target):
